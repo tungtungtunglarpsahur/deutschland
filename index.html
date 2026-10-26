@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Stadtlichter</title>
+<meta name="description" content="Wie viele der 2.057 Städte Deutschlands kennst du? Jede Stadt, die du nennst, leuchtet auf der Karte auf.">
+<meta name="theme-color" content="#0a1630">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Stadtlichter">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preload" href="fonts/d-din-pro-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/d-din-pro-700.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="data/map.json" as="fetch" crossorigin>
+<link rel="preload" href="data/cities.json" as="fetch" crossorigin>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="app">
+  <main class="map" id="map">
+    <canvas id="canvas" role="img" aria-label="Deutschlandkarte mit Grenzen der Länder, Kreise und Gemeinden. Gefundene Städte leuchten weiß."></canvas>
+    <div class="overlay" id="overlay">
+      <div class="card" id="card" hidden>
+        <div class="card-name" id="card-name"></div>
+        <div class="card-meta" id="card-meta"></div>
+        <div class="card-pop" id="card-pop"></div>
+        <div class="card-missing" id="card-missing" hidden>Noch nicht gefunden</div>
+        <button class="card-close" id="card-close" type="button" aria-label="Schließen">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="map-tools">
+      <button class="tool" id="zoom-in" type="button" aria-label="Hineinzoomen" title="Hineinzoomen">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg>
+      </button>
+      <button class="tool" id="zoom-out" type="button" aria-label="Herauszoomen" title="Herauszoomen">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 10h12"/></svg>
+      </button>
+      <button class="tool" id="zoom-fit" type="button" aria-label="Ganz Deutschland zeigen" title="Ganz Deutschland zeigen">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/></svg>
+      </button>
+    </div>
+    <div class="loading" id="loading"><span><span class="lamp" style="display:inline-block;vertical-align:middle"></span>Karte wird geladen …</span></div>
+  </main>
+
+  <aside class="panel" aria-label="Spiel">
+    <div class="panel-top">
+      <header class="brand">
+        <span class="lamp" aria-hidden="true"></span>
+        <div class="brand-text">
+          <h1>Stadtlichter</h1>
+          <p>Nenne Städte. Jede leuchtet auf.</p>
+        </div>
+      </header>
+
+      <section class="score" aria-label="Spielstand">
+        <div class="score-line">
+          <span class="count" id="count">0</span>
+          <span class="of">/ <span id="total">2.057</span></span>
+          <span class="unit">Städte</span>
+        </div>
+        <div class="bar" role="progressbar" aria-label="Gefundene Städte" aria-valuemin="0" aria-valuenow="0" aria-valuemax="2057"><span id="bar"></span></div>
+        <div class="stats"><span id="pct">0,0 %</span><span id="pop">0 Einwohner</span></div>
+      </section>
+
+      <form class="guess" id="guess" autocomplete="off" novalidate>
+        <label class="sr-only" for="city">Stadt eingeben</label>
+        <input id="city" name="city" type="text" placeholder="Stadt eingeben" autocomplete="off" autocorrect="off" autocapitalize="words" spellcheck="false" enterkeyhint="enter" maxlength="60">
+        <button class="go" type="submit" aria-label="Eintragen" title="Eintragen">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 4.5v5.5a2 2 0 0 1-2 2H5"/><path d="M8.5 8.5L5 12l3.5 3.5"/></svg>
+        </button>
+      </form>
+      <p class="feedback" id="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="tabs" role="tablist">
+      <button class="tab" id="tab-found" role="tab" aria-selected="true" aria-controls="pane-found" type="button">Gefunden <small id="tab-count">0</small></button>
+      <button class="tab" id="tab-states" role="tab" aria-selected="false" aria-controls="pane-states" type="button">Bundesländer</button>
+      <label class="sr-only" for="sort">Sortierung</label>
+      <select class="sort" id="sort">
+        <option value="new">Neueste</option>
+        <option value="az">A–Z</option>
+        <option value="pop">Größte</option>
+      </select>
+    </div>
+
+    <div class="tab-body" id="pane-found" role="tabpanel" aria-labelledby="tab-found">
+      <div class="scroll" id="found-scroll">
+        <p class="empty" id="found-empty">Noch keine Stadt gefunden. Fang mit deiner eigenen an und arbeite dich durchs Land.</p>
+        <ol class="found-list" id="found-list"></ol>
+      </div>
+    </div>
+    <div class="tab-body" id="pane-states" role="tabpanel" aria-labelledby="tab-states" hidden>
+      <div class="scroll">
+        <ul class="state-list" id="state-list"></ul>
+      </div>
+    </div>
+
+    <footer class="panel-foot">
+      <button class="link" id="toggle-missing" type="button" aria-pressed="false">Fehlende zeigen</button>
+      <button class="link" id="reset" type="button">Neu starten</button>
+      <span class="confirm" id="confirm" hidden>Alle Funde löschen?
+        <button class="btn-danger" id="reset-yes" type="button">Löschen</button>
+        <button class="link" id="reset-no" type="button">Abbrechen</button>
+      </span>
+      <p class="credits">Karte: © GeoBasis-DE / BKG (2025), verändert; Natural Earth. Städteliste nach Wikipedia, Stand 2025.</p>
+    </footer>
+  </aside>
+</div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

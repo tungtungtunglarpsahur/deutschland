@@ -1,0 +1,11 @@
+{
+  "name": "stadtlichter-data",
+  "private": true,
+  "description": "Erzeugt die Karten- und Städtedaten für Stadtlichter",
+  "type": "module",
+  "devDependencies": {
+    "mapshaper": "0.7.98",
+    "polylabel": "1.1.0",
+    "topojson-client": "3.1.0"
+  }
+}
