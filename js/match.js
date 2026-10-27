@@ -1,4 +1,4 @@
-// Eingabe-Abgleich: Schreibweisen normalisieren, Städte und Gemeinden nachschlagen.
+// Eingabe-Abgleich: Schreibweisen normalisieren, Städte und Gemeinden nachschlagen, Tippfehler erkennen.
 
 // Füllwörter, die beim Vergleich wegfallen dürfen („Frankfurt am Main“ = „Frankfurt Main“)
 const FILLER = new Set(['an', 'am', 'im', 'in', 'der', 'die', 'dem', 'den', 'bei', 'auf', 'vor', 'zu', 'a', 'd', 'i', 'b', 'v']);
@@ -68,18 +68,15 @@ function put(map, key, id) {
 
 export class Matcher {
   /**
-   * @param {Array} cities  [{n, b?, a?, p}]
-   * @param {Array<string>} gemeinden  Namen von Gemeinden ohne Stadtrecht
+   * @param {Array} places  [{n, b?, a?, p}] – Städte und Gemeinden
    */
-  constructor(cities, gemeinden = []) {
-    this.cities = cities;
-    // Stufen: 1 = voller Name, 2 = Kurzname, 3 = Umlaut ohne e („Munchen“)
-    this.full = new Map();
-    this.short = new Map();
-    this.loose = new Map();
+  constructor(places) {
+    this.places = places;
+    this.exact = new Map();   // voller Name oder Kurzname, Umlaut als ae/oe/ue
+    this.loose = new Map();   // Umlaut ohne e („Munchen“), nur als Rückfall
     this.shortKey = [];
     this.fuzzy = [];
-    cities.forEach((c, id) => {
+    places.forEach((c, id) => {
       const short = c.b || shortName(c.n);
       const fullNames = new Set();
       const shortNames = new Set([short]);
@@ -90,11 +87,11 @@ export class Matcher {
       }
       for (const a of c.a || []) shortNames.add(shortName(a));
       for (const n of fullNames) {
-        put(this.full, plainKey(n), id); put(this.full, compactKey(n), id);
+        put(this.exact, plainKey(n), id); put(this.exact, compactKey(n), id);
         put(this.loose, plainKey(n, false), id); put(this.loose, compactKey(n, false), id);
       }
       for (const n of shortNames) {
-        put(this.short, plainKey(n), id);
+        put(this.exact, plainKey(n), id);
         put(this.loose, plainKey(n, false), id);
       }
       this.shortKey[id] = plainKey(short);
@@ -106,27 +103,18 @@ export class Matcher {
       if (!this.byShort.has(k)) this.byShort.set(k, []);
       this.byShort.get(k).push(id);
     });
-    this.gemeinden = new Map();
-    this.setGemeinden(gemeinden);
-  }
-
-  setGemeinden(list) {
-    for (const g of list) for (const n of [...variants(g), shortName(g)]) {
-      for (const k of [plainKey(n), compactKey(n), plainKey(n, false)]) if (k && !this.gemeinden.has(k)) this.gemeinden.set(k, g);
-    }
   }
 
   lookup(map, keys) {
     const ids = new Set();
     for (const k of keys) { const s = map.get(k); if (s) for (const id of s) ids.add(id); }
-    return [...ids].sort((x, y) => this.cities[y].p - this.cities[x].p);
+    return [...ids].sort((x, y) => this.places[y].p - this.places[x].p);
   }
 
   /**
    * Prüft eine Eingabe.
    * @returns {{type:'found', id, others:number, short:string}
    *          |{type:'dupe', id}
-   *          |{type:'gemeinde', name}
    *          |{type:'unknown', suggestion?:number, suggestionFound?:boolean}
    *          |{type:'empty'}}
    */
@@ -134,26 +122,15 @@ export class Matcher {
     const raw = String(input || '').trim();
     if (!raw || !plainKey(raw)) return { type: 'empty' };
     const eKeys = [plainKey(raw), compactKey(raw)];
-    const aKeys = [plainKey(raw, false), compactKey(raw, false)];
-    let dupe = null;
-    const tiers = [
-      { ids: this.lookup(this.full, eKeys), viaShort: false },
-      { ids: this.lookup(this.short, eKeys), viaShort: true },
-    ];
+    let ids = this.lookup(this.exact, eKeys);
     // Umlaute ohne e („Munchen“) nur, wenn sonst nichts passt
-    if (!tiers[0].ids.length && !tiers[1].ids.length) tiers.push({ ids: this.lookup(this.loose, aKeys), viaShort: true });
-    for (const t of tiers) {
-      if (!t.ids.length) continue;
-      const open = t.ids.filter(id => !isFound(id));
-      if (!open.length) { if (dupe === null) dupe = t.ids[0]; continue; }
+    if (!ids.length) ids = this.lookup(this.loose, [plainKey(raw, false), compactKey(raw, false)]);
+    if (ids.length) {
+      // Bei gleichen Namen zuerst der größte noch fehlende Ort
+      const open = ids.filter(id => !isFound(id));
+      if (!open.length) return { type: 'dupe', id: ids[0] };
       const id = open[0];
-      const others = t.viaShort ? (this.byShort.get(this.shortKey[id]) || []).filter(o => o !== id && !isFound(o)).length : 0;
-      return { type: 'found', id, others, short: this.cities[id].b || shortName(this.cities[id].n) };
-    }
-    if (dupe !== null) return { type: 'dupe', id: dupe };
-    for (const k of [...eKeys, ...aKeys]) {
-      const g = this.gemeinden.get(k);
-      if (g) return { type: 'gemeinde', name: g };
+      return { type: 'found', id, others: open.length - 1, short: this.places[id].b || shortName(this.places[id].n) };
     }
     // Tippfehler: nächste Schreibweise suchen
     const key = eKeys[0];
@@ -166,10 +143,10 @@ export class Matcher {
       }
       if (best !== null && bestD <= max) {
         let pick = best;
-        // Tippfehler im Kurznamen („Neustadtt“): größte noch offene Stadt dieses Namens vorschlagen
+        // Tippfehler im Kurznamen („Neustadtt“): größten noch fehlenden Ort dieses Namens vorschlagen
         if (bestKey === this.shortKey[best]) {
           const open = (this.byShort.get(bestKey) || []).filter(id => !isFound(id));
-          if (open.length) pick = open.sort((x, y) => this.cities[y].p - this.cities[x].p)[0];
+          if (open.length) pick = open.sort((x, y) => this.places[y].p - this.places[x].p)[0];
         }
         return { type: 'unknown', suggestion: pick, suggestionFound: isFound(pick) };
       }
@@ -180,6 +157,6 @@ export class Matcher {
   preferOver(a, b, isFound) {
     const fa = isFound(a), fb = isFound(b);
     if (fa !== fb) return !fa;
-    return this.cities[a].p > this.cities[b].p;
+    return this.places[a].p > this.places[b].p;
   }
 }

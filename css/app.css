@@ -25,6 +25,7 @@
   --ink-3: #6c7da6;
   --sign: #f6c21c;
   --sign-ink: #161616;
+  --gem: #e9dcbc;
   --miss: #ff8f8f;
   --row-hover: rgba(158, 172, 206, 0.08);
   --flash: rgba(246, 194, 28, 0.28);
@@ -99,7 +100,7 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   color: var(--ink-2);
   font-size: 15px;
   letter-spacing: 0.02em;
-  z-index: 4;
+  z-index: 5;
   background: var(--night);
   transition: opacity 0.5s ease;
 }
@@ -107,7 +108,8 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .loading .lamp { margin-right: 10px; }
 .loading-error { color: var(--miss); max-width: 30ch; text-align: center; }
 
-.overlay { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+/* Ortsschild und Infokarte liegen über den Zoom-Knöpfen (das Schild lässt Tipps durch) */
+.overlay { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
 
 /* Ortsschild */
 .sign {
@@ -205,9 +207,14 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .count { font-weight: 700; font-size: 54px; line-height: 0.92; letter-spacing: -0.01em; }
 .of { font-size: 24px; color: var(--ink-2); white-space: nowrap; }
 .unit { font-size: 16px; color: var(--ink-2); }
-.bar { height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
-.bar > span { display: block; height: 100%; width: 0; background: var(--sign); border-radius: inherit; transition: width 0.6s cubic-bezier(0.2, 0.8, 0.2, 1); }
-.stats { display: flex; justify-content: space-between; gap: 12px; color: var(--ink-2); font-size: 14px; font-variant-numeric: tabular-nums; }
+.bar { display: flex; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.bar > span { flex: none; height: 100%; width: 0; transition: width 0.6s cubic-bezier(0.2, 0.8, 0.2, 1); }
+/* Städte gelb wie das Ortsschild, übrige Gemeinden hell */
+.bar-town { background: var(--sign); }
+.bar-gem { background: var(--gem); }
+.stats { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; color: var(--ink-2); font-size: 14px; font-variant-numeric: tabular-nums; }
+.stats b { color: var(--ink); font-weight: 700; }
+.swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--sign); margin-right: 7px; vertical-align: 1px; }
 
 .guess { position: relative; }
 .guess input {
@@ -289,7 +296,7 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .row {
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   padding: 9px 8px;
@@ -303,6 +310,10 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .row.flash { animation: flash 1.8s ease-out; }
 @keyframes flash { from { background: var(--flash); } to { background: transparent; } }
 .row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
+.row-sub { color: var(--ink-3); font-size: 13px; margin-left: 4px; }
+/* Punkt wie auf der Karte: Stadt hell mit Lichthof, Gemeinde klein */
+.mark { justify-self: center; width: 5px; height: 5px; border-radius: 50%; background: var(--ink-2); }
+.mark-town { width: 8px; height: 8px; background: #fff; box-shadow: 0 0 6px 1px rgba(255, 214, 150, 0.55); }
 .badge {
   font-size: 11px; letter-spacing: 0.04em;
   color: var(--ink-2);
@@ -317,6 +328,7 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .state-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
 .state-row .bar { grid-column: 1 / -1; height: 3px; }
 .state-row .row-pop { color: var(--ink-2); }
+.state-row .row-sub { grid-column: 1 / -1; margin-left: 0; margin-top: -2px; }
 
 .panel-foot {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
@@ -346,7 +358,7 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   .score-line { grid-row: 1; }
   .count { font-size: 40px; }
   .of { font-size: 20px; }
-  .unit { display: none; }
+  .unit { font-size: 14px; }
   .score .bar { grid-column: 2; grid-row: 1; align-self: center; margin-top: 10px; }
   .score .stats { grid-column: 1 / -1; font-size: 13px; }
   .credits { display: none; }

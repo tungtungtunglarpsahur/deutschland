@@ -6,7 +6,7 @@ import polylabel from 'polylabel';
 const [,, topoFile, outFile] = process.argv;
 const WORK = process.env.WORK || '.work';
 const T = JSON.parse(fs.readFileSync(topoFile, 'utf8'));
-const cities = JSON.parse(fs.readFileSync(`${WORK}/cities_stage2.json`, 'utf8'));
+const places = JSON.parse(fs.readFileSync(`${WORK}/places_stage2.json`, 'utf8'));
 const objName = Object.keys(T.objects)[0];
 const gem = T.objects[objName];
 const geoms = gem.geometries;
@@ -56,13 +56,15 @@ for (const [k, gs] of byD) {
 console.log('districts', byD.size, 'odd', odd);
 function ringArea(r) { let s = 0; for (let i = 0, n = r.length, j = n - 1; i < n; j = i++) s += (r[j][0] + r[i][0]) * (r[j][1] - r[i][1]); return s / 2; }
 
-// ---- city polygons ----
-const byCity = new Map();
-for (const g of geoms) { const c = P(g).c; if (c >= 0) { if (!byCity.has(c)) byCity.set(c, []); byCity.get(c).push(g); } }
-const cityPolys = cities.map((c, i) => {
-  const gs = byCity.get(i);
-  if (!gs) throw new Error('no geometry for city ' + i + ' ' + c.name);
-  return topo.mergeArcs(T, gs).arcs; // MultiPolygon arcs
+// ---- Flächen der Orte (Städte und Gemeinden) ----
+const byPlace = new Map();
+for (const g of geoms) { const c = P(g).c; if (c >= 0) { if (!byPlace.has(c)) byPlace.set(c, []); byPlace.get(c).push(g); } }
+const placePolys = places.map((c, i) => {
+  const gs = byPlace.get(i);
+  if (!gs) throw new Error('keine Fläche für Ort ' + i + ' ' + c.name);
+  // einzelne Gemeinde: Bögen direkt übernehmen, sonst zusammenführen
+  if (gs.length === 1) return gs[0].type === 'Polygon' ? [gs[0].arcs] : gs[0].arcs;
+  return topo.mergeArcs(T, gs).arcs; // MultiPolygon-Bögen
 });
 
 // ---- state label points ----
@@ -127,7 +129,7 @@ const out = {
   districts: districts.arcs,
   munis: munis.arcs,
   land: land.arcs,
-  cities: cityPolys,
+  places: placePolys,
   stateLabels,
   neighbors,
   rivers,

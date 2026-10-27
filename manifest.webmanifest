@@ -1,7 +1,7 @@
 {
-  "name": "Stadtlichter – alle Städte Deutschlands",
+  "name": "Stadtlichter – alle Städte und Gemeinden Deutschlands",
   "short_name": "Stadtlichter",
-  "description": "Nenne alle 2.057 Städte Deutschlands. Jede, die du findest, leuchtet auf der Karte auf.",
+  "description": "Nenne alle 10.774 Städte und Gemeinden Deutschlands. Jeder Ort, den du findest, leuchtet auf der Karte auf.",
   "lang": "de",
   "start_url": "./",
   "scope": "./",

@@ -1,4 +1,4 @@
-// Kartenansicht: Canvas-Renderer mit Zoom, Pinch, Schwung und Lichtern für gefundene Städte.
+// Kartenansicht: Canvas-Renderer mit Zoom, Pinch, Schwung und Lichtern für gefundene Städte und Gemeinden.
 import { polygonsPath } from './geo.js';
 
 const PAL = {
@@ -20,6 +20,7 @@ const PAL = {
   dot: '#ffffff',
   halo: 'rgba(10,22,48,0.92)',
   label: '#f4f6ff',
+  labelGem: '#d3dbef',
   missing: 'rgba(255,135,135,0.85)',
   sign: '#f6c21c',
 };
@@ -41,12 +42,14 @@ function makeGlow() {
 const easeInOut = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
 export class MapView {
-  constructor({ container, canvas, geo, cities, onTap, onFrame }) {
+  constructor({ container, canvas, geo, places, onTap, onFrame }) {
     this.container = container;
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.geo = geo;
-    this.cities = cities;
+    this.places = places;
+    // Beschriftungs-Rang: Einwohner, Städte zählen doppelt
+    this.byRank = (a, b) => places[b].p * (places[b].t ? 2 : 1) - places[a].p * (places[a].t ? 2 : 1);
     this.onTap = onTap || (() => {});
     this.onFrame = onFrame || (() => {});
     this.found = new Set();
@@ -54,7 +57,7 @@ export class MapView {
     this.showMissing = false;
     this.selected = -1;
     this.pulses = [];
-    this.cityPaths = new Map();
+    this.placePaths = new Map();
     this.textW = new Map();
     this.base = document.createElement('canvas');
     this.bctx = this.base.getContext('2d');
@@ -81,21 +84,21 @@ export class MapView {
   /* ---------- Zustand ---------- */
   setFound(ids) {
     this.found = new Set(ids);
-    this.labelOrder = [...this.found].sort((a, b) => this.cities[b].p - this.cities[a].p);
+    this.labelOrder = [...this.found].sort(this.byRank);
     this.baseDirty = true;
     this.request();
   }
   addFound(id, pulse = true) {
     this.found.add(id);
     this.labelOrder.push(id);
-    this.labelOrder.sort((a, b) => this.cities[b].p - this.cities[a].p);
+    this.labelOrder.sort(this.byRank);
     if (pulse && !this.reduceMotion) this.pulses.push({ id, t0: performance.now() });
     this.baseDirty = true;
     this.request();
   }
-  setShowMissing(on) { this.showMissing = on; this.request(); }
+  setShowMissing(on) { this.showMissing = on; this.baseDirty = true; this.request(); }
   fontsChanged() { this.textW.clear(); this.stateW?.clear(); this.baseDirty = true; this.request(); }
-  select(id) { this.selected = id; this.request(); }
+  select(id) { if (id === this.selected) return; this.selected = id; this.baseDirty = true; this.request(); }
 
   /* ---------- Geometrie / Ansicht ---------- */
   resize() {
@@ -165,8 +168,8 @@ export class MapView {
     this.flyTo(t0.cx, t0.cy, k, 320);
   }
 
-  flyToCity(id, minZoom = 6) {
-    const c = this.cities[id];
+  flyToPlace(id, minZoom = 6) {
+    const c = this.places[id];
     const k = Math.max(this.k, this.kFit * minZoom);
     this.flyTo(c.x, c.y, Math.min(k, this.kFit * 24));
   }
@@ -321,13 +324,13 @@ export class MapView {
   hitTest(x, y, radius) {
     let best = -1, bd = radius * radius;
     const test = id => {
-      const c = this.cities[id];
+      const c = this.places[id];
       const sx = (c.x - this.cx) * this.k + this.W / 2, sy = (this.cy - c.y) * this.k + this.H / 2;
       const d = (sx - x) ** 2 + (sy - y) ** 2;
       if (d < bd) { bd = d; best = id; }
     };
     for (const id of this.found) test(id);
-    if (best < 0 && this.showMissing) for (let id = 0; id < this.cities.length; id++) if (!this.found.has(id)) test(id);
+    if (best < 0 && this.showMissing) for (let id = 0; id < this.places.length; id++) if (!this.found.has(id)) test(id);
     return best;
   }
 
@@ -436,7 +439,7 @@ export class MapView {
       g.strokeStyle = PAL.areaEdge;
       g.lineWidth = px(0.7);
       for (const id of this.found) {
-        const p = this.cityPath(id);
+        const p = this.placePath(id);
         g.fill(p, 'evenodd');
         if (z > 1.8) g.stroke(p);
       }
@@ -454,14 +457,22 @@ export class MapView {
       g.fillStyle = l.k === 's' ? PAL.seaLabel : PAL.neighborLabel;
       spaced(g, l.n, x, y, l.k === 's' ? 3 : 1.5);
     }
+    // Lichter, Punkte und Beschriftungen gehören zur Grundkarte: beim Verschieben wird nur das Bild bewegt
+    this.drawPoints(g, M, W + 2 * M, H + 2 * M);
     this.baseView = { cx: this.cx, cy: this.cy, k, W, H, M };
     this.baseDirty = false;
   }
 
-  cityPath(id) {
-    let p = this.cityPaths.get(id);
-    if (!p) { p = polygonsPath(this.geo.arcs, this.geo.cityPolys[id]); this.cityPaths.set(id, p); }
+  placePath(id) {
+    let p = this.placePaths.get(id);
+    if (!p) { p = polygonsPath(this.geo.arcs, this.geo.placePolys[id]); this.placePaths.set(id, p); }
     return p;
+  }
+
+  // Punktgröße: nach Einwohnern, Gemeinden etwas kleiner als Städte
+  radius(c) {
+    const zr = Math.min(1.9, 1 + 0.2 * Math.log2(Math.max(1, this.zoom)));
+    return (1.25 + 0.95 * Math.log10(Math.max(c.p, 1000) / 1000)) * zr * (c.t ? 1 : 0.8);
   }
 
   draw(now) {
@@ -477,72 +488,84 @@ export class MapView {
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(this.base, bx - (bv.W / 2 + bv.M) * s, by - (bv.H / 2 + bv.M) * s, (bv.W + 2 * bv.M) * s, (bv.H + 2 * bv.M) * s);
     }
-    const z = this.zoom, k = this.k, cx = this.cx, cy = this.cy;
-    const zr = Math.min(1.9, 1 + 0.2 * Math.log2(Math.max(1, z)));
-    const rad = p => (1.25 + 0.95 * Math.log10(Math.max(p, 1000) / 1000)) * zr;
-    const sx = c => (c.x - cx) * k + W / 2, sy = c => (cy - c.y) * k + H / 2;
-
-    // Fehlende Städte (Lösung)
-    if (this.showMissing) {
-      ctx.strokeStyle = PAL.missing; ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let id = 0; id < this.cities.length; id++) {
-        if (this.found.has(id)) continue;
-        const c = this.cities[id], x = sx(c), y = sy(c);
-        if (x < -10 || y < -10 || x > W + 10 || y > H + 10) continue;
-        const r = Math.max(1.6, rad(c.p) * 0.8);
-        ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, Math.PI * 2);
-      }
-      ctx.stroke();
-    }
-    if (this.found.size) {
-      // Lichthöfe (additiv: dichte Regionen leuchten heller)
-      ctx.globalCompositeOperation = 'lighter';
-      // kleine Karten (Handy) bekommen kleinere, schwächere Lichthöfe
-      const gs = Math.min(1, Math.max(0.55, Math.min(W, H) / 800));
-      ctx.globalAlpha = Math.min(0.85, (0.4 + 0.07 * z) * (0.75 + 0.25 * gs));
-      for (const id of this.found) {
-        const c = this.cities[id], x = sx(c), y = sy(c);
-        const gr = (rad(c.p) * 4.4 + 4) * gs;
-        if (x < -gr || y < -gr || x > W + gr || y > H + gr) continue;
-        ctx.drawImage(this.glow, x - gr, y - gr, gr * 2, gr * 2);
-      }
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.fillStyle = PAL.dot;
-      ctx.beginPath();
-      for (const id of this.found) {
-        const c = this.cities[id], x = sx(c), y = sy(c);
-        if (x < -8 || y < -8 || x > W + 8 || y > H + 8) continue;
-        const r = rad(c.p);
-        ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, Math.PI * 2);
-      }
-      ctx.fill();
-    }
+    const sx = c => (c.x - this.cx) * this.k + W / 2, sy = c => (this.cy - c.y) * this.k + H / 2;
     // Auswahl
     if (this.selected >= 0) {
-      const c = this.cities[this.selected], x = sx(c), y = sy(c), r = rad(c.p) + 5;
+      const c = this.places[this.selected], r = this.radius(c) + 5;
       ctx.strokeStyle = this.found.has(this.selected) ? PAL.sign : PAL.missing;
       ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(sx(c), sy(c), r, 0, Math.PI * 2); ctx.stroke();
     }
     // Puls für neue Funde
     if (this.pulses.length) {
       this.pulses = this.pulses.filter(p => now - p.t0 < 1500);
       for (const p of this.pulses) {
-        const t = (now - p.t0) / 1500, c = this.cities[p.id];
-        const r = rad(c.p) + 4 + t * 34;
+        const t = (now - p.t0) / 1500, c = this.places[p.id];
+        const r = this.radius(c) + 4 + t * 34;
         ctx.strokeStyle = `rgba(246,194,28,${(0.9 * (1 - t)).toFixed(3)})`;
         ctx.lineWidth = 2 * (1 - t) + 0.5;
         ctx.beginPath(); ctx.arc(sx(c), sy(c), r, 0, Math.PI * 2); ctx.stroke();
       }
     }
-    this.drawLabels(sx, sy, rad, z);
   }
 
-  drawLabels(sx, sy, rad, z) {
-    const { ctx, W, H } = this;
-    const cell = 8, cols = Math.ceil(W / cell) + 1, rows = Math.ceil(H / cell) + 1;
+  // Fehlende Orte, Lichthöfe, Punkte und Beschriftungen in Bildschirmkoordinaten (mit Rand `off`)
+  drawPoints(g, off, Wb, Hb) {
+    const { dpr, k, cx, cy, W, H } = this;
+    const z = this.zoom;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const sx = c => (c.x - cx) * k + W / 2 + off, sy = c => (cy - c.y) * k + H / 2 + off;
+    const out = (x, y, m) => x < -m || y < -m || x > Wb + m || y > Hb + m;
+
+    // Fehlende Orte (Lösung): Städte als Ringe, Gemeinden bei kleinem Maßstab als Punkte
+    if (this.showMissing) {
+      const dotsOnly = z < 2.5;
+      g.strokeStyle = PAL.missing; g.fillStyle = PAL.missing; g.lineWidth = 1;
+      const rings = new Path2D(), dots = new Path2D();
+      for (let id = 0; id < this.places.length; id++) {
+        if (this.found.has(id)) continue;
+        const c = this.places[id], x = sx(c), y = sy(c);
+        if (out(x, y, 10)) continue;
+        if (!c.t && dotsOnly) { dots.rect(x - 0.8, y - 0.8, 1.6, 1.6); continue; }
+        const r = Math.max(1.6, this.radius(c) * 0.8);
+        rings.moveTo(x + r, y); rings.arc(x, y, r, 0, Math.PI * 2);
+      }
+      g.globalAlpha = 0.6; g.fill(dots); g.globalAlpha = 1;
+      g.stroke(rings);
+    }
+    if (this.found.size) {
+      // Lichthöfe (additiv: dichte Regionen leuchten heller); kleine Karten bekommen kleinere Lichthöfe
+      g.globalCompositeOperation = 'lighter';
+      const gs = Math.min(1, Math.max(0.55, Math.min(W, H) / 800));
+      const ga = Math.min(0.85, (0.4 + 0.07 * z) * (0.75 + 0.25 * gs));
+      for (const towns of [false, true]) {
+        g.globalAlpha = towns ? ga : ga * 0.55;
+        for (const id of this.found) {
+          const c = this.places[id];
+          if (!c.t !== !towns) continue;
+          const x = sx(c), y = sy(c);
+          const gr = (this.radius(c) * 4.4 + 4) * gs * (towns ? 1 : 0.6);
+          if (out(x, y, gr)) continue;
+          g.drawImage(this.glow, x - gr, y - gr, gr * 2, gr * 2);
+        }
+      }
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = 'source-over';
+      g.fillStyle = PAL.dot;
+      g.beginPath();
+      for (const id of this.found) {
+        const c = this.places[id], x = sx(c), y = sy(c);
+        if (out(x, y, 8)) continue;
+        const r = this.radius(c);
+        g.moveTo(x + r, y); g.arc(x, y, r, 0, Math.PI * 2);
+      }
+      g.fill();
+    }
+    this.drawLabels(g, sx, sy, Wb, Hb, off, z);
+  }
+
+  drawLabels(g, sx, sy, Wb, Hb, off, z) {
+    const cell = 8, cols = Math.ceil(Wb / cell) + 1, rows = Math.ceil(Hb / cell) + 1;
     const grid = new Uint8Array(cols * rows);
     const free = (x0, y0, x1, y1) => {
       const a = Math.max(0, Math.floor(x0 / cell)), b = Math.min(cols - 1, Math.floor(x1 / cell));
@@ -555,23 +578,23 @@ export class MapView {
       const c = Math.max(0, Math.floor(y0 / cell)), d = Math.min(rows - 1, Math.floor(y1 / cell));
       for (let j = c; j <= d; j++) for (let i = a; i <= b; i++) grid[j * cols + i] = 1;
     };
-    const maxLabels = Math.min(420, Math.round(70 * z * z));
+    // Begrenzung nach sichtbarer Fläche, damit der Rand außerhalb des Bildes nichts wegnimmt
+    const maxLabels = Math.min(600, Math.round(Math.min(420, 70 * z * z) * (Wb * Hb) / Math.max(1, this.W * this.H)));
     let n = 0;
-    ctx.textBaseline = 'middle';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = PAL.halo;
-    ctx.fillStyle = PAL.label;
-    // Selektierte Stadt zuerst beschriften
+    g.textBaseline = 'middle';
+    g.lineJoin = 'round';
+    g.strokeStyle = PAL.halo;
+    // Ausgewählten Ort zuerst beschriften
     const order = this.selected >= 0 && this.found.has(this.selected) ? [this.selected, ...this.labelOrder.filter(i => i !== this.selected)] : this.labelOrder;
     for (const id of order) {
       if (n >= maxLabels) break;
-      const c = this.cities[id], x = sx(c), y = sy(c);
-      if (x < -150 || y < -20 || x > W + 150 || y > H + 20) continue;
-      const big = c.p >= 100000, size = c.p >= 500000 ? 14 : big ? 13 : 12;
+      const c = this.places[id], x = sx(c), y = sy(c);
+      if (x < -150 || y < -20 || x > Wb + 150 || y > Hb + 20) continue;
+      const big = c.t && c.p >= 100000, size = c.p >= 500000 ? 14 : big ? 13 : 12;
       const font = `${big ? 700 : 400} ${size}px ${FONT}`;
       let w = this.textW.get(id);
-      if (w === undefined) { ctx.font = font; w = ctx.measureText(c.n).width; this.textW.set(id, w); }
-      const r = rad(c.p), h = size;
+      if (w === undefined) { g.font = font; w = g.measureText(c.n).width; this.textW.set(id, w); }
+      const r = this.radius(c), h = size;
       let lx = x + r + 4, align = 'left';
       if (!free(lx - 2, y - h / 2 - 2, lx + w + 2, y + h / 2 + 2)) {
         lx = x - r - 4; align = 'right';
@@ -580,39 +603,39 @@ export class MapView {
       if (align === 'left') take(lx - 2, y - h / 2 - 2, lx + w + 2, y + h / 2 + 2);
       else take(lx - w - 2, y - h / 2 - 2, lx + 2, y + h / 2 + 2);
       take(x - r, y - r, x + r, y + r);
-      ctx.font = font;
-      ctx.textAlign = align;
-      ctx.lineWidth = 3.2;
-      ctx.strokeText(c.n, lx, y);
-      ctx.fillText(c.n, lx, y);
+      g.font = font;
+      g.fillStyle = c.t ? PAL.label : PAL.labelGem;
+      g.textAlign = align;
+      g.lineWidth = 3.2;
+      g.strokeText(c.n, lx, y);
+      g.fillText(c.n, lx, y);
       n++;
     }
-    this.drawStateLabels(free, z);
+    this.drawStateLabels(g, free, z, off);
   }
 
-  // Bundesländer nur dort beschriften, wo keine Stadt-Beschriftung liegt
-  drawStateLabels(free, z) {
+  // Bundesländer nur dort beschriften, wo keine Orts-Beschriftung liegt
+  drawStateLabels(g, free, z, off) {
     const la = z < 1.2 ? 0.62 : z < 3.2 ? 0.62 * (3.2 - z) / 2 : 0;
     if (la < 0.02) return;
-    const { ctx, W, H } = this;
-    ctx.font = `400 13px ${FONT}`;
-    ctx.textAlign = 'left';
-    ctx.fillStyle = `rgba(${PAL.stateLabel.join(',')},${la.toFixed(3)})`;
+    const { W, H } = this;
+    g.font = `400 13px ${FONT}`;
+    g.textAlign = 'left';
+    g.fillStyle = `rgba(${PAL.stateLabel.join(',')},${la.toFixed(3)})`;
     const sp = 2.2;
     for (const s of this.geo.stateLabels) {
       if (s.a < 1000) continue; // Stadtstaaten nicht beschriften (das wären Lösungen)
       let m = this.stateW?.get(s.n);
       if (!m) {
-        const ws = [...s.n].map(ch => ctx.measureText(ch).width);
+        const ws = [...s.n].map(ch => g.measureText(ch).width);
         m = { ws, total: ws.reduce((a, b) => a + b, 0) + sp * (ws.length - 1) };
         (this.stateW ||= new Map()).set(s.n, m);
       }
-      const x = (s.x - this.cx) * this.k + W / 2, y = (this.cy - s.y) * this.k + H / 2;
+      const x = (s.x - this.cx) * this.k + W / 2 + off, y = (this.cy - s.y) * this.k + H / 2 + off;
       const x0 = x - m.total / 2;
-      if (x0 + m.total < 0 || x0 > W || y < -10 || y > H + 10) continue;
       if (!free(x0 - 2, y - 9, x0 + m.total + 2, y + 9)) continue;
       let cx = x0;
-      [...s.n].forEach((ch, i) => { ctx.fillText(ch, cx, y); cx += m.ws[i] + sp; });
+      [...s.n].forEach((ch, i) => { g.fillText(ch, cx, y); cx += m.ws[i] + sp; });
     }
   }
 }

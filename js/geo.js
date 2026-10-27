@@ -121,7 +121,7 @@ export function buildGeometry(data) {
     neighbors,
     lakes,
     rivers: riverBands,
-    cityPolys: data.cities,          // Bogenlisten, Pfade werden bei Bedarf gebaut
+    placePolys: data.places,         // Bogenlisten je Ort, Pfade werden bei Bedarf gebaut
     stateLabels: data.stateLabels,
     labels: data.labels,
   };

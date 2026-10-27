@@ -1,5 +1,5 @@
 // Offline-Unterstützung: alle Dateien beim ersten Besuch zwischenspeichern.
-const VERSION = 'stadtlichter-v1';
+const VERSION = 'stadtlichter-v2';
 const FILES = [
   './',
   'index.html',
@@ -9,8 +9,7 @@ const FILES = [
   'js/map.js',
   'js/match.js',
   'data/map.json',
-  'data/cities.json',
-  'data/gemeinden.json',
+  'data/places.json',
   'fonts/d-din-pro-400.woff2',
   'fonts/d-din-pro-700.woff2',
   'manifest.webmanifest',

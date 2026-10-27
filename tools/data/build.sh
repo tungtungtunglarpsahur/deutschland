@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Baut data/map.json, data/cities.json und data/gemeinden.json aus offenen Quellen neu.
+# Baut data/map.json und data/places.json aus offenen Quellen neu.
 # Voraussetzungen: git, node/npm, python3 mit: pip install rdata shapely pyproj pandas
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -24,12 +24,12 @@ if [ ! -f "$SRC/lk/package/data/districts.json" ]; then
 fi
 [ -d node_modules ] || npm install --silent
 
-echo "== Gemeinden (VG250) lesen und Städte zuordnen"
+echo "== Gemeinden (VG250) lesen, Städte zuordnen, Namen aufbereiten"
 python3 -I read_rda.py >/dev/null 2>&1
 python3 -I to_geojson.py >/dev/null
 python3 -I fix_districts.py
-python3 -I build_cities.py
-python3 -I build_stage2.py >/dev/null
+python3 -I build_places.py
+PREV_PLACES="$OUT/places.json" python3 -I build_names.py
 python3 -I build_geo_input.py
 
 echo "== Projektion, Vereinfachung, Kontextebenen"
@@ -43,7 +43,5 @@ npx mapshaper -i "$NE/ne_10m_lakes.geojson" "$NE/ne_10m_lakes_europe.geojson" co
 echo "== Ausgabe"
 python3 -I project_points.py
 node build_map.mjs "$WORK/gem6.topojson" "$OUT/map.json"
-cp "$WORK/cities_final.json" "$OUT/cities.json"
-python3 -I build_gemeinden.py
-cp "$WORK/gemeinden.json" "$OUT/gemeinden.json"
+cp "$WORK/places_final.json" "$OUT/places.json"
 echo "Fertig: $OUT"

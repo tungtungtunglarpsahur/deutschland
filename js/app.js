@@ -13,10 +13,24 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const el = {};
-let cities = [], matcher = null, map = null, geo = null;
+let places = [], townTotal = 0, matcher = null, map = null, geo = null;
 const found = [];            // [{id, t}] in Fundreihenfolge
 const foundSet = new Set();
-let sortMode = 'new', showMissing = false, selected = -1, sign = null, stateBoxes = [], stateTotals = [];
+let foundTowns = 0, foundPop = 0;
+let sortMode = 'new', showMissing = false, selected = -1, sign = null;
+let stateBoxes = [], stateTotals = [], stateFound = [];
+let saveKeys = [], nameCount = new Map();
+
+/* ---------- Daten ---------- */
+// Zeile: [Name, Land, Einwohner, x, y, Kreis, Merkmale, andere Schreibweisen | 0, Kurzname | 0]
+function toPlace(r) {
+  return { n: r[0], s: r[1], p: r[2], x: r[3], y: r[4], k: r[5], t: !!(r[6] & 1), kf: !!(r[6] & 2), gf: !!(r[6] & 4), a: r[7] || undefined, b: r[8] || undefined };
+}
+
+function getMatcher() {
+  if (!matcher) matcher = new Matcher(places);
+  return matcher;
+}
 
 /* ---------- Hilfen ---------- */
 function expandAbbr(n) {
@@ -38,15 +52,37 @@ function kreisLabel(c) {
   return 'Landkreis ' + k;
 }
 
+const kind = c => c.t ? 'Stadt' : c.gf ? 'Gemeindefreier Bezirk' : 'Gemeinde';
+
+function describe(c) {
+  if (c.s === 10 || c.s === 1) return 'Stadtstaat';
+  if (c.s === 3) return 'Kreisfreie Stadt, Land Bremen';
+  if (!c.k) return `${kreisLabel(c)}, ${STATES[c.s]}`;
+  return `${kind(c)}, ${kreisLabel(c)}, ${STATES[c.s]}`;
+}
+
+// Name mit Kreis, wenn es den Namen mehrfach gibt
+const nameWithKreis = c => nameCount.get(c.n) > 1 ? `${c.n} (${kreisLabel(c)})` : c.n;
+
 function formatPop(p) {
   return p >= 1e6 ? pf.format(p / 1e6) + ' Mio.' : nf.format(p);
 }
 
-function keyOf(id) { const c = cities[id]; return c.n + '|' + c.s; }
+/* ---------- Speichern ---------- */
+// Städte: „Name|Land“ (wie in Version 1), Gemeinden: „g|Name|Land|Kreis“
+function buildKeys() {
+  const seen = new Map();
+  saveKeys = places.map(c => {
+    let k = c.t ? `${c.n}|${c.s}` : `g|${c.n}|${c.s}|${c.k}`;
+    const n = (seen.get(k) || 0) + 1;
+    seen.set(k, n);
+    return n > 1 ? `${k}#${n}` : k;
+  });
+}
 
 function save() {
   try {
-    localStorage.setItem(STORE, JSON.stringify({ v: 1, f: found.map(f => [keyOf(f.id), f.t]), sort: sortMode }));
+    localStorage.setItem(STORE, JSON.stringify({ v: 1, f: found.map(f => [saveKeys[f.id], f.t]), sort: sortMode }));
   } catch (e) { /* Speicher nicht verfügbar */ }
 }
 
@@ -54,7 +90,7 @@ function restore() {
   let data = null;
   try { data = JSON.parse(localStorage.getItem(STORE) || 'null'); } catch (e) { data = null; }
   if (!data || data.v !== 1) return;
-  const byKey = new Map(cities.map((c, i) => [keyOf(i), i]));
+  const byKey = new Map(saveKeys.map((k, i) => [k, i]));
   for (const [k, t] of data.f || []) {
     const id = byKey.get(k);
     if (id !== undefined && !foundSet.has(id)) { found.push({ id, t }); foundSet.add(id); }
@@ -62,31 +98,48 @@ function restore() {
   if (['new', 'az', 'pop'].includes(data.sort)) sortMode = data.sort;
 }
 
+/* ---------- Zählen ---------- */
+function recount() {
+  foundTowns = 0; foundPop = 0;
+  stateFound = Array.from({ length: 16 }, () => ({ all: 0, towns: 0 }));
+  for (const f of found) count(f.id);
+}
+
+function count(id) {
+  const c = places[id];
+  foundPop += c.p;
+  stateFound[c.s].all++;
+  if (c.t) { foundTowns++; stateFound[c.s].towns++; }
+}
+
 /* ---------- Anzeige ---------- */
+const pct = (a, b) => (b ? (a / b) * 100 : 0).toFixed(2) + '%';
+
 function updateScore() {
-  const n = found.length, total = cities.length;
+  const n = found.length, total = places.length;
   el.count.textContent = nf.format(n);
   el.total.textContent = nf.format(total);
   el.tabCount.textContent = nf.format(n);
-  const r = total ? n / total : 0;
-  el.bar.style.width = (r * 100).toFixed(2) + '%';
-  el.bar.parentElement.setAttribute('aria-valuenow', String(n));
-  el.bar.parentElement.setAttribute('aria-valuemax', String(total));
-  el.pct.textContent = pf.format(r * 100) + ' %';
-  let pop = 0;
-  for (const f of found) pop += cities[f.id].p;
-  el.pop.textContent = formatPop(pop) + ' Einwohner';
+  el.barTown.style.width = pct(foundTowns, total);
+  el.barGem.style.width = pct(n - foundTowns, total);
+  el.progress.setAttribute('aria-valuenow', String(n));
+  el.progress.setAttribute('aria-valuemax', String(total));
+  el.progress.setAttribute('aria-valuetext', `${nf.format(n)} von ${nf.format(total)} Gemeinden, davon ${nf.format(foundTowns)} von ${nf.format(townTotal)} Städten`);
+  el.towns.textContent = nf.format(foundTowns);
+  el.townTotal.textContent = nf.format(townTotal);
+  el.pop.textContent = formatPop(foundPop) + ' Einwohner';
 }
 
 function rowFor(id) {
-  const c = cities[id];
+  const c = places[id];
   const li = document.createElement('li');
   const b = document.createElement('button');
   b.type = 'button';
   b.className = 'row';
   b.dataset.id = id;
-  b.innerHTML = `<span class="row-name">${esc(c.n)}</span><span class="badge" title="${esc(STATES[c.s])}">${ABBR[c.s]}</span><span class="row-pop">${nf.format(c.p)}</span>`;
-  b.setAttribute('aria-label', `${c.n}, ${STATES[c.s]}, ${nf.format(c.p)} Einwohner`);
+  const sub = nameCount.get(c.n) > 1 ? ` <span class="row-sub">${esc(kreisLabel(c))}</span>` : '';
+  b.innerHTML = `<span class="mark${c.t ? ' mark-town' : ''}" aria-hidden="true"></span><span class="row-name">${esc(c.n)}${sub}</span><span class="badge" title="${esc(STATES[c.s])}">${ABBR[c.s]}</span><span class="row-pop">${nf.format(c.p)}</span>`;
+  b.setAttribute('aria-label', `${kind(c)} ${nameWithKreis(c)}, ${STATES[c.s]}, ${nf.format(c.p)} Einwohner`);
   li.appendChild(b);
   return li;
 }
@@ -94,8 +147,8 @@ function rowFor(id) {
 function renderList() {
   const ids = found.map(f => f.id);
   if (sortMode === 'new') ids.reverse();
-  else if (sortMode === 'az') ids.sort((a, b) => cities[a].n.localeCompare(cities[b].n, 'de'));
-  else ids.sort((a, b) => cities[b].p - cities[a].p);
+  else if (sortMode === 'az') ids.sort((a, b) => places[a].n.localeCompare(places[b].n, 'de'));
+  else ids.sort((a, b) => places[b].p - places[a].p);
   const frag = document.createDocumentFragment();
   for (const id of ids) frag.appendChild(rowFor(id));
   el.list.replaceChildren(frag);
@@ -105,7 +158,7 @@ function renderList() {
 
 function addRow(id) {
   el.empty.hidden = true;
-  if (sortMode !== 'new') { renderList(); }
+  if (sortMode !== 'new') renderList();
   else el.list.prepend(rowFor(id));
   flashRow(id, sortMode === 'new');
 }
@@ -121,18 +174,18 @@ function flashRow(id, scrollTop) {
 }
 
 function renderStates() {
-  const per = new Array(16).fill(0);
-  for (const f of found) per[cities[f.id].s]++;
   const order = STATES.map((n, i) => i).sort((a, b) => STATES[a].localeCompare(STATES[b], 'de'));
   const frag = document.createDocumentFragment();
   for (const s of order) {
+    const tot = stateTotals[s], got = stateFound[s];
     const li = document.createElement('li');
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'row state-row';
     b.dataset.state = s;
-    const r = stateTotals[s] ? per[s] / stateTotals[s] : 0;
-    b.innerHTML = `<span class="row-name">${esc(STATES[s])}</span><span class="row-pop">${nf.format(per[s])} / ${nf.format(stateTotals[s])}</span><span class="bar"><span style="width:${(r * 100).toFixed(2)}%"></span></span>`;
+    const towns = tot.all === tot.towns ? '' : `<span class="row-sub">davon Städte ${nf.format(got.towns)} / ${nf.format(tot.towns)}</span>`;
+    b.innerHTML = `<span class="row-name">${esc(STATES[s])}</span><span class="row-pop">${nf.format(got.all)} / ${nf.format(tot.all)}</span>`
+      + `<span class="bar"><span class="bar-town" style="width:${pct(got.towns, tot.all)}"></span><span class="bar-gem" style="width:${pct(got.all - got.towns, tot.all)}"></span></span>${towns}`;
     li.appendChild(b);
     frag.appendChild(li);
   }
@@ -147,7 +200,7 @@ function say(html, cls = '') {
 /* ---------- Ortsschild und Karte ---------- */
 function showSign(id) {
   if (sign) sign.el.remove();
-  const c = cities[id];
+  const c = places[id];
   const node = document.createElement('div');
   node.className = 'sign pop';
   node.setAttribute('aria-hidden', 'true');
@@ -163,12 +216,11 @@ function openCard(id) {
   if (sign) { sign.el.remove(); sign = null; }
   selected = id;
   map.select(id);
-  const c = cities[id];
-  const isFound = foundSet.has(id);
+  const c = places[id];
   el.cardName.textContent = c.n;
-  el.cardMeta.textContent = `${kreisLabel(c)}, ${STATES[c.s]}`;
+  el.cardMeta.textContent = describe(c);
   el.cardPop.textContent = `${nf.format(c.p)} Einwohner`;
-  el.cardMissing.hidden = isFound;
+  el.cardMissing.hidden = foundSet.has(id);
   el.card.hidden = false;
   el.card.dataset.w = el.card.offsetWidth;
   el.card.dataset.h = el.card.offsetHeight;
@@ -186,17 +238,17 @@ function positionOverlays() {
   const W = map.W, H = map.H, m = 10;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   if (sign) {
-    const c = cities[sign.id];
+    const c = places[sign.id];
     const [x, y] = map.toScreen(c.x, c.y);
     const sx = clamp(x, sign.w / 2 + m, W - sign.w / 2 - m);
     const sy = clamp(y - 3, sign.h + m, H - m);
     sign.el.style.transform = `translate(${(sx - sign.w / 2).toFixed(1)}px, ${(sy - sign.h).toFixed(1)}px)`;
   }
   if (!el.card.hidden && selected >= 0) {
-    const c = cities[selected];
+    const c = places[selected];
     const [x, y] = map.toScreen(c.x, c.y);
     const w = +el.card.dataset.w || 220, h = +el.card.dataset.h || 100;
-    let cx = clamp(x - w / 2, m, W - w - m);
+    const cx = clamp(x - w / 2, m, W - w - m);
     let cy = y - h - 18;
     if (cy < m + 50) cy = y + 18;
     cy = clamp(cy, m, H - h - m);
@@ -205,10 +257,11 @@ function positionOverlays() {
 }
 
 /* ---------- Spiel ---------- */
-function addCity(id) {
+function addPlace(id) {
   if (foundSet.has(id)) return;
   found.push({ id, t: Date.now() });
   foundSet.add(id);
+  count(id);
   map.addFound(id);
   updateScore();
   addRow(id);
@@ -218,47 +271,47 @@ function addCity(id) {
   if (selected >= 0 && selected !== id) closeCard();
 }
 
+function foundMessage(id, others = 0, short = '') {
+  const c = places[id];
+  if (found.length === places.length) return `<b>Alle ${nf.format(places.length)} Gemeinden gefunden.</b> Deutschland leuchtet.`;
+  if (c.t && foundTowns === townTotal) return `<b>Alle ${nf.format(townTotal)} Städte gefunden.</b> Jetzt fehlen noch ${nf.format(places.length - found.length)} Gemeinden.`;
+  let extra = '';
+  if (others > 0) extra = others === 1
+    ? ` Noch ein weiterer Ort heißt ${esc(short)}.`
+    : ` Noch ${nf.format(others)} weitere Orte heißen ${esc(short)}.`;
+  return `${kind(c)} <b>${esc(nameWithKreis(c))}</b> gefunden.${extra}`;
+}
+
+function clearInput() {
+  el.input.value = '';
+  el.form.classList.remove('has-text');
+}
+
 function submit(text) {
-  const res = matcher.check(text, id => foundSet.has(id));
+  const res = getMatcher().check(text, id => foundSet.has(id));
   if (res.type === 'empty') return;
   if (res.type === 'found') {
-    const c = cities[res.id];
-    addCity(res.id);
-    el.input.value = '';
-    el.form.classList.remove('has-text');
-    if (found.length === cities.length) {
-      say(`<b>Alle ${nf.format(cities.length)} Städte gefunden.</b> Deutschland leuchtet.`, 'ok');
-      return;
-    }
-    let extra = '';
-    if (res.others > 0) extra = res.others === 1
-      ? ` Noch eine weitere Stadt heißt ${esc(res.short)}.`
-      : ` Noch ${nf.format(res.others)} weitere Städte heißen ${esc(res.short)}.`;
-    say(`<b>${esc(c.n)}</b> gefunden.${extra}`, 'ok');
+    addPlace(res.id);
+    clearInput();
+    say(foundMessage(res.id, res.others, res.short), 'ok');
     return;
   }
   if (res.type === 'dupe') {
-    const c = cities[res.id];
-    say(`<b>${esc(c.n)}</b> hast du schon.`);
-    el.input.value = '';
-    el.form.classList.remove('has-text');
+    say(`<b>${esc(nameWithKreis(places[res.id]))}</b> hast du schon.`);
+    clearInput();
     flashRow(res.id, false);
     map.select(res.id); selected = -1;
     setTimeout(() => { if (selected < 0) map.select(-1); }, 1600);
     return;
   }
   shake();
-  if (res.type === 'gemeinde') {
-    say(`<b>${esc(res.name)}</b> ist eine Gemeinde, aber keine Stadt.`, 'bad');
-    el.input.select();
-    return;
-  }
+  const typed = esc(text.trim());
   if (res.suggestion !== undefined) {
-    const c = cities[res.suggestion];
-    if (res.suggestionFound) say(`Meintest du <b>${esc(c.n)}</b>? Die hast du schon.`);
-    else say(`Meintest du <button type="button" class="suggest" data-id="${res.suggestion}">${esc(c.n)}</button>?`);
+    const c = places[res.suggestion];
+    if (res.suggestionFound) say(`Keine Gemeinde „${typed}“. Meintest du <b>${esc(nameWithKreis(c))}</b>? Die hast du schon.`);
+    else say(`Keine Gemeinde „${typed}“. Meintest du <button type="button" class="suggest" data-id="${res.suggestion}">${esc(nameWithKreis(c))}</button>?`);
   } else {
-    say(`Keine Stadt namens <b>„${esc(text.trim())}“</b> gefunden.`, 'bad');
+    say(`Keine Stadt oder Gemeinde namens <b>„${typed}“</b>. Ortsteile zählen nicht.`, 'bad');
   }
   el.input.select();
 }
@@ -272,6 +325,7 @@ function shake() {
 function resetGame() {
   found.length = 0;
   foundSet.clear();
+  recount();
   closeCard();
   map.setFound([]);
   updateScore();
@@ -291,25 +345,24 @@ function syncViewport() {
 
 /* ---------- Start ---------- */
 function bindUI() {
-  el.form.addEventListener('submit', e => { e.preventDefault(); submit(el.input.value); });
+  el.form.addEventListener('submit', e => { e.preventDefault(); if (places.length) submit(el.input.value); });
   el.input.addEventListener('input', () => el.form.classList.toggle('has-text', el.input.value.trim().length > 0));
   el.feedback.addEventListener('click', e => {
     const b = e.target.closest('.suggest');
     if (!b) return;
     const id = +b.dataset.id;
     if (!foundSet.has(id)) {
-      addCity(id);
-      say(`<b>${esc(cities[id].n)}</b> gefunden.`, 'ok');
+      addPlace(id);
+      say(foundMessage(id), 'ok');
     }
-    el.input.value = '';
-    el.form.classList.remove('has-text');
+    clearInput();
     el.input.focus();
   });
   el.list.addEventListener('click', e => {
     const b = e.target.closest('.row');
     if (!b) return;
     const id = +b.dataset.id;
-    map.flyToCity(id);
+    map.flyToPlace(id);
     openCard(id);
   });
   el.states.addEventListener('click', e => {
@@ -348,11 +401,12 @@ function bindUI() {
     const inInput = document.activeElement === el.input;
     if (e.key === 'Escape') {
       if (!el.card.hidden) closeCard();
-      else if (inInput) { el.input.value = ''; el.form.classList.remove('has-text'); }
+      else if (inInput) clearInput();
       return;
     }
     if (inInput || e.metaKey || e.ctrlKey || e.altKey) return;
     if (document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
+    if (!map) return;
     if (e.key === '+' || e.key === '=') { map.zoomBy(2); e.preventDefault(); return; }
     if (e.key === '-') { map.zoomBy(0.5); e.preventDefault(); return; }
     if (e.key.length === 1 && /\p{L}/u.test(e.key)) el.input.focus();
@@ -372,8 +426,9 @@ async function getJSON(url) {
 }
 
 async function main() {
-  for (const id of ['map', 'canvas', 'overlay', 'loading', 'count', 'total', 'bar', 'pct', 'pop', 'feedback']) el[id] = $(id);
+  for (const id of ['map', 'canvas', 'overlay', 'loading', 'count', 'total', 'progress', 'towns', 'pop', 'feedback']) el[id] = $(id);
   Object.assign(el, {
+    barTown: $('bar-town'), barGem: $('bar-gem'), townTotal: $('town-total'),
     form: $('guess'), input: $('city'), tabCount: $('tab-count'), list: $('found-list'), empty: $('found-empty'),
     listScroll: $('found-scroll'), states: $('state-list'), sort: $('sort'), tabFound: $('tab-found'), tabStates: $('tab-states'),
     paneFound: $('pane-found'), paneStates: $('pane-states'), toggleMissing: $('toggle-missing'), reset: $('reset'),
@@ -381,34 +436,38 @@ async function main() {
     cardMeta: $('card-meta'), cardPop: $('card-pop'), cardMissing: $('card-missing'), cardClose: $('card-close'),
   });
   bindUI();
-  let mapData;
+  let mapData, rows;
   try {
-    [mapData, cities] = await Promise.all([getJSON('data/map.json'), getJSON('data/cities.json')]);
+    [mapData, rows] = await Promise.all([getJSON('data/map.json'), getJSON('data/places.json')]);
   } catch (e) {
     el.loading.innerHTML = '<p class="loading-error">Die Kartendaten konnten nicht geladen werden. Prüfe die Verbindung und lade die Seite neu.</p>';
     console.error(e);
     return;
   }
+  places = rows.map(toPlace);
   geo = buildGeometry(mapData);
-  matcher = new Matcher(cities);
-  getJSON('data/gemeinden.json').then(list => matcher.setGemeinden(list)).catch(() => {});
+  townTotal = places.reduce((n, c) => n + (c.t ? 1 : 0), 0);
+  for (const c of places) nameCount.set(c.n, (nameCount.get(c.n) || 0) + 1);
+  buildKeys();
 
-  stateTotals = new Array(16).fill(0);
+  stateTotals = Array.from({ length: 16 }, () => ({ all: 0, towns: 0 }));
   const boxes = Array.from({ length: 16 }, () => [Infinity, Infinity, -Infinity, -Infinity]);
-  cities.forEach((c, id) => {
-    stateTotals[c.s]++;
+  places.forEach((c, id) => {
+    stateTotals[c.s].all++;
+    if (c.t) stateTotals[c.s].towns++;
     const b = boxes[c.s];
-    const cb = bboxOfPolygons(geo.arcs, geo.cityPolys[id]);
+    const cb = bboxOfPolygons(geo.arcs, geo.placePolys[id]);
     b[0] = Math.min(b[0], cb[0]); b[1] = Math.min(b[1], cb[1]); b[2] = Math.max(b[2], cb[2]); b[3] = Math.max(b[3], cb[3]);
   });
   stateBoxes = boxes;
 
   restore();
+  recount();
   map = new MapView({
     container: el.map,
     canvas: el.canvas,
     geo,
-    cities,
+    places,
     onTap: id => { if (id >= 0) openCard(id); else closeCard(); },
     onFrame: positionOverlays,
   });
@@ -416,7 +475,7 @@ async function main() {
   updateScore();
   renderList();
   renderStates();
-  if (found.length) say(`Willkommen zurück. ${nf.format(found.length)} Städte leuchten schon.`);
+  if (found.length) say(`Willkommen zurück. ${nf.format(found.length)} ${found.length === 1 ? 'Ort leuchtet' : 'Orte leuchten'} schon.`);
 
   if (document.fonts && document.fonts.load) {
     Promise.all([document.fonts.load('400 13px "D-DIN-PRO"'), document.fonts.load('700 13px "D-DIN-PRO"')])
@@ -424,6 +483,8 @@ async function main() {
       .catch(() => {});
   }
   requestAnimationFrame(() => el.loading.classList.add('done'));
+  // Namensverzeichnis erst nach dem ersten Bild aufbauen (dauert auf dem iPad einen Moment)
+  setTimeout(getMatcher, 400);
   if (matchMedia('(hover: hover) and (pointer: fine)').matches) el.input.focus({ preventScroll: true });
 
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
